@@ -1,0 +1,36 @@
+{
+  "name": "flexstream",
+  "version": "1.0.0",
+  "description": "Universal Video Player - Stream videos from any URL",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "dev": "nodemon server/server.js",
+    "test": "echo \"No tests specified\" && exit 0",
+    "build": "echo \"Build completed\"",
+    "deploy": "echo \"Deployment script\""
+  },
+  "keywords": [
+    "video-player",
+    "streaming",
+    "proxy",
+    "web-player",
+    "video-streaming"
+  ],
+  "author": "Niranjannn",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itsniranjannn/flexstream.git"
+  }
+}
