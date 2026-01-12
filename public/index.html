@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FlexStream — Universal Video Player</title>
+    <link rel="icon" type="image/x-icon" href="favicon.ico">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Background Effects -->
+        <div class="bg-gradient"></div>
+        <div class="bg-grid"></div>
+        <div class="bg-glow"></div>
+        
+        <!-- Header -->
+        <header class="header">
+            <div class="logo">
+                <img src="logo.svg" alt="FlexStream Logo" class="logo-icon">
+                <span class="logo-text">FlexStream</span>
+            </div>
+            
+            <div class="header-controls">
+                <!-- Theme Toggle -->
+                <button class="theme-toggle" id="themeToggle" title="Toggle Theme">
+                    <i class="fas fa-moon"></i>
+                    <i class="fas fa-sun"></i>
+                </button>
+                
+                <!-- History Button -->
+                <button class="history-btn" id="historyBtn" title="Watch History">
+                    <i class="fas fa-history"></i>
+                </button>
+                
+                <!-- Stats -->
+                <div class="header-stats">
+                    <div class="stat" id="bufferStat">
+                        <span class="stat-label">Buffer</span>
+                        <span class="stat-value" id="bufferPercent">0s</span>
+                    </div>
+                    <div class="stat" id="networkStat">
+                        <span class="stat-label">Speed</span>
+                        <span class="stat-value" id="networkSpeed">—</span>
+                    </div>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- URL Input Section -->
+            <section class="url-section" id="urlSection">
+                <div class="url-container">
+                    <h1 class="title">
+                        <span class="title-gradient">FlexStream</span>
+                        <span class="title-sub">Universal Video Player</span>
+                    </h1>
+                    <p class="subtitle">Paste any video URL. No limits, no compromises.</p>
+                    
+                    <div class="url-input-wrapper">
+                        <div class="url-input-bg"></div>
+                        <input 
+                            type="url" 
+                            id="videoUrl" 
+                            class="url-input" 
+                            placeholder="https://example.com/video.mp4"
+                            autocomplete="off"
+                            spellcheck="false"
+                            aria-label="Video URL"
+                        >
+                        <button class="play-btn" id="loadBtn" aria-label="Stream Video">
+                            <i class="fas fa-play"></i>
+                            <span>Stream Now</span>
+                        </button>
+                    </div>
+                    
+                    <!-- Quick Actions -->
+                    <div class="quick-actions">
+                        <button class="quick-btn" id="sampleVideoBtn">
+                            <i class="fas fa-video"></i>
+                            Try Sample
+                        </button>
+                        <button class="quick-btn" id="uploadBtn">
+                            <i class="fas fa-upload"></i>
+                            Upload Local
+                        </button>
+                        <input type="file" id="fileInput" accept="video/*" style="display: none;">
+                    </div>
+                    
+                    <!-- Advanced Options -->
+                    <div class="advanced-options">
+                        <div class="option-group">
+                            <label class="option-label">
+                                <input type="checkbox" id="useProxy">
+                                <span class="option-text">Use Proxy Server</span>
+                                <span class="option-hint">(For CORS blocked videos)</span>
+                            </label>
+                        </div>
+                        
+                        <div class="option-group">
+                            <label class="option-label">
+                                <input type="checkbox" id="autoPlayNext" checked>
+                                <span class="option-text">Auto-play next in playlist</span>
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <!-- Supported Formats -->
+                    <div class="supported-formats">
+                        <div class="formats-header">
+                            <i class="fas fa-check-circle"></i>
+                            <span>Supported Formats</span>
+                        </div>
+                        <div class="formats-grid">
+                            <span class="format-tag"><i class="fas fa-file-video"></i> MP4</span>
+                            <span class="format-tag"><i class="fas fa-file-video"></i> WebM</span>
+                            <span class="format-tag"><i class="fas fa-file-video"></i> MKV</span>
+                            <span class="format-tag"><i class="fas fa-stream"></i> HLS</span>
+                            <span class="format-tag"><i class="fas fa-wave-square"></i> DASH</span>
+                            <span class="format-tag"><i class="fas fa-file-audio"></i> MP3</span>
+                        </div>
+                    </div>
+                    
+                    <!-- Recent URLs -->
+                    <div class="recent-urls" id="recentUrls">
+                        <h3><i class="fas fa-clock"></i> Recent Videos</h3>
+                        <div class="recent-list" id="recentList">
+                            <!-- Dynamically populated -->
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Video Player Section -->
+            <section class="player-section" id="playerSection">
+                <div class="player-container" id="playerContainer">
+                    <!-- Video Element -->
+                    <video 
+                        id="videoPlayer" 
+                        class="video-element"
+                        preload="auto"
+                        playsinline
+                        crossorigin="anonymous"
+                        aria-label="Video Player"
+                    ></video>
+
+                    <!-- Watermark -->
+                    <div class="watermark">
+                        <span>FlexStream by Niranjannn</span>
+                    </div>
+
+                    <!-- Buffer Indicator -->
+                    <div class="buffer-indicator" id="bufferIndicator">
+                        <div class="buffer-indicator-dot"></div>
+                        <span>Buffering ahead...</span>
+                    </div>
+
+                    <!-- Loading Overlay -->
+                    <div class="loading-overlay" id="loadingOverlay">
+                        <div class="loader">
+                            <div class="loader-ring"></div>
+                            <div class="loader-ring"></div>
+                            <div class="loader-ring"></div>
+                        </div>
+                        <span class="loading-text" id="loadingText">Loading video...</span>
+                        <div class="loading-progress" id="loadingProgress">
+                            <div class="progress-bar"></div>
+                        </div>
+                    </div>
+
+                    <!-- Play Overlay -->
+                    <div class="play-overlay" id="playOverlay">
+                        <button class="big-play-btn" id="bigPlayBtn" aria-label="Play">
+                            <i class="fas fa-play"></i>
+                        </button>
+                        <div class="play-overlay-info">
+                            <h3>Ready to Stream</h3>
+                            <p>Click play or press Space</p>
+                        </div>
+                    </div>
+
+                    <!-- Enhanced Controls -->
+                    <div class="controls" id="controls">
+                        <!-- Progress Bar -->
+                        <div class="progress-container" id="progressContainer">
+                            <div class="progress-buffer" id="progressBuffer"></div>
+                            <div class="progress-played" id="progressPlayed"></div>
+                            <div class="progress-thumb" id="progressThumb"></div>
+                            <div class="progress-tooltip" id="progressTooltip">0:00</div>
+                            <div class="progress-chapters" id="progressChapters"></div>
+                        </div>
+
+                        <!-- Controls Row -->
+                        <div class="controls-row">
+                            <div class="controls-left">
+                                <!-- Play/Pause -->
+                                <button class="ctrl-btn" id="playPauseBtn" title="Play/Pause (Space)">
+                                    <i class="fas fa-play icon-play"></i>
+                                    <i class="fas fa-pause icon-pause"></i>
+                                </button>
+
+                                <!-- Skip Backward -->
+                                <button class="ctrl-btn" id="skipBackBtn" title="Back 10s (←)">
+                                    <i class="fas fa-backward"></i>
+                                    <span class="skip-label">10s</span>
+                                </button>
+
+                                <!-- Skip Forward -->
+                                <button class="ctrl-btn" id="skipForwardBtn" title="Forward 10s (→)">
+                                    <i class="fas fa-forward"></i>
+                                    <span class="skip-label">10s</span>
+                                </button>
+
+                                <!-- Volume -->
+                                <div class="volume-container">
+                                    <button class="ctrl-btn" id="muteBtn" title="Mute (M)">
+                                        <i class="fas fa-volume-up icon-volume-high"></i>
+                                        <i class="fas fa-volume-down icon-volume-low"></i>
+                                        <i class="fas fa-volume-mute icon-volume-mute"></i>
+                                    </button>
+                                    <div class="volume-slider-wrapper">
+                                        <input type="range" class="volume-slider" id="volumeSlider" min="0" max="1" step="0.01" value="1" aria-label="Volume">
+                                        <div class="volume-fill" id="volumeFill"></div>
+                                    </div>
+                                </div>
+
+                                <!-- Time Display -->
+                                <div class="time-display" id="timeDisplay">
+                                    <span id="currentTime">0:00</span>
+                                    <span class="time-sep">/</span>
+                                    <span id="duration">0:00</span>
+                                </div>
+                                
+                                <!-- Time Input -->
+                                <div class="time-input-wrapper" id="timeInputWrapper">
+                                    <input 
+                                        type="text" 
+                                        id="timeInput" 
+                                        class="time-input" 
+                                        placeholder="Jump to time..."
+                                        aria-label="Jump to time"
+                                    >
+                                    <button class="time-go-btn" id="timeGoBtn" aria-label="Go">Go</button>
+                                </div>
+                            </div>
+
+                            <div class="controls-right">
+                                <!-- Screenshot Button -->
+                                <button class="ctrl-btn" id="screenshotBtn" title="Take Screenshot (S)">
+                                    <i class="fas fa-camera"></i>
+                                </button>
+
+                                <!-- Playback Speed -->
+                                <div class="speed-container">
+                                    <button class="ctrl-btn speed-btn" id="speedBtn" title="Playback Speed">
+                                        <span id="speedValue">1x</span>
+                                        <i class="fas fa-chevron-down"></i>
+                                    </button>
+                                    <div class="speed-menu" id="speedMenu">
+                                        <div class="speed-presets">
+                                            <button class="speed-option" data-speed="0.25">0.25x</button>
+                                            <button class="speed-option" data-speed="0.5">0.5x</button>
+                                            <button class="speed-option" data-speed="0.75">0.75x</button>
+                                            <button class="speed-option active" data-speed="1">1x</button>
+                                            <button class="speed-option" data-speed="1.25">1.25x</button>
+                                            <button class="speed-option" data-speed="1.5">1.5x</button>
+                                            <button class="speed-option" data-speed="2">2x</button>
+                                            <button class="speed-option" data-speed="3">3x</button>
+                                        </div>
+                                        <div class="speed-custom">
+                                            <input type="number" id="customSpeedInput" class="custom-speed-input" placeholder="Custom" min="0.1" max="16" step="0.1" aria-label="Custom speed">
+                                            <button class="custom-speed-btn" id="customSpeedBtn">Set</button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Quality Selector -->
+                                <div class="quality-container" id="qualityContainer">
+                                    <button class="ctrl-btn quality-btn" id="qualityBtn" title="Quality">
+                                        <i class="fas fa-hd"></i>
+                                        <span id="qualityValue">Auto</span>
+                                    </button>
+                                </div>
+
+                                <!-- Subtitle Button -->
+                                <button class="ctrl-btn" id="subtitleBtn" title="Subtitles (C)">
+                                    <i class="fas fa-closed-captioning"></i>
+                                </button>
+
+                                <!-- Picture in Picture -->
+                                <button class="ctrl-btn" id="pipBtn" title="Picture in Picture (P)">
+                                    <i class="fas fa-picture-in-picture"></i>
+                                </button>
+
+                                <!-- Fullscreen -->
+                                <button class="ctrl-btn" id="fullscreenBtn" title="Fullscreen (F)">
+                                    <i class="fas fa-expand icon-expand"></i>
+                                    <i class="fas fa-compress icon-compress"></i>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <!-- Additional Controls -->
+                        <div class="controls-bottom">
+                            <!-- Favorite Button -->
+                            <button class="favorite-btn" id="favoriteBtn" title="Add to Favorites">
+                                <i class="far fa-heart"></i>
+                                <span>Favorite</span>
+                            </button>
+                            
+                            <!-- Loop Button -->
+                            <button class="loop-btn" id="loopBtn" title="Loop Video">
+                                <i class="fas fa-redo"></i>
+                                <span>Loop</span>
+                            </button>
+                            
+                            <!-- Share Button -->
+                            <button class="share-btn" id="shareBtn" title="Share Video">
+                                <i class="fas fa-share-alt"></i>
+                                <span>Share</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Error Overlay -->
+                    <div class="error-overlay" id="errorOverlay">
+                        <div class="error-icon">
+                            <i class="fas fa-exclamation-triangle"></i>
+                        </div>
+                        <span class="error-text" id="errorText">Unable to load video</span>
+                        <div class="error-actions">
+                            <button class="retry-btn" id="retryBtn">
+                                <i class="fas fa-redo"></i>
+                                Try Again
+                            </button>
+                            <button class="report-btn" id="reportBtn">
+                                <i class="fas fa-bug"></i>
+                                Report Issue
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Player Sidebar -->
+                <div class="player-sidebar" id="playerSidebar">
+                    <button class="sidebar-toggle" id="sidebarToggle">
+                        <i class="fas fa-chevron-left"></i>
+                    </button>
+                    
+                    <div class="sidebar-content">
+                        <!-- Video Info -->
+                        <div class="video-info" id="videoInfo">
+                            <h3><i class="fas fa-info-circle"></i> Video Information</h3>
+                            <div class="info-grid">
+                                <div class="info-item">
+                                    <span class="info-label">URL:</span>
+                                    <span class="info-value" id="infoUrl">-</span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Duration:</span>
+                                    <span class="info-value" id="infoDuration">-</span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Format:</span>
+                                    <span class="info-value" id="infoFormat">-</span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Size:</span>
+                                    <span class="info-value" id="infoSize">-</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Playlist -->
+                        <div class="playlist-section" id="playlistSection">
+                            <h3><i class="fas fa-list"></i> Playlist</h3>
+                            <div class="playlist-controls">
+                                <button class="playlist-btn" id="addToPlaylistBtn">
+                                    <i class="fas fa-plus"></i> Add Current
+                                </button>
+                                <button class="playlist-btn" id="clearPlaylistBtn">
+                                    <i class="fas fa-trash"></i> Clear
+                                </button>
+                            </div>
+                            <div class="playlist-items" id="playlistItems">
+                                <!-- Playlist items go here -->
+                            </div>
+                        </div>
+                        
+                        <!-- Statistics -->
+                        <div class="stats-section">
+                            <h3><i class="fas fa-chart-bar"></i> Statistics</h3>
+                            <div class="stats-grid">
+                                <div class="stat-item">
+                                    <span class="stat-label">Total Play Time:</span>
+                                    <span class="stat-value" id="totalPlayTime">0:00</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Videos Played:</span>
+                                    <span class="stat-value" id="videosPlayed">0</span>
+                                </div>
+                                <div class="stat-item">
+                                    <span class="stat-label">Data Used:</span>
+                                    <span class="stat-value" id="dataUsed">0 MB</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Back Button -->
+                <button class="back-btn" id="backBtn">
+                    <i class="fas fa-arrow-left"></i>
+                    <span>Back to Input</span>
+                </button>
+            </section>
+        </main>
+
+        <!-- Modals -->
+        <!-- History Modal -->
+        <div class="modal" id="historyModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3><i class="fas fa-history"></i> Watch History</h3>
+                    <button class="modal-close" id="closeHistoryModal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="history-list" id="historyList">
+                        <!-- History items go here -->
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button class="modal-btn" id="clearHistoryBtn">
+                        <i class="fas fa-trash"></i> Clear All History
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Screenshot Gallery Modal -->
+        <div class="modal" id="screenshotModal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3><i class="fas fa-images"></i> Screenshots</h3>
+                    <button class="modal-close" id="closeScreenshotModal">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="modal-body">
+                    <div class="screenshot-grid" id="screenshotGrid">
+                        <!-- Screenshots go here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Shortcuts Help -->
+        <div class="shortcuts-help" id="shortcutsHelp">
+            <button class="help-btn" id="helpBtn" title="Keyboard Shortcuts (?)">
+                <i class="fas fa-question-circle"></i>
+            </button>
+            <div class="shortcuts-modal" id="shortcutsModal">
+                <div class="shortcuts-content">
+                    <h3><i class="fas fa-keyboard"></i> Keyboard Shortcuts</h3>
+                    <div class="shortcuts-grid">
+                        <div class="shortcut">
+                            <kbd>Space</kbd>
+                            <span>Play/Pause</span>
+                        </div>
+                        <div class="shortcut">
+                            <kbd>F</kbd>
+                            <span>Fullscreen</span>
+                        </div>
+                        <div class="shortcut">
+                            <kbd>M</kbd>
+                            <span>Mute</span>
+                        </div>
+                        <div class="shortcut">
+                            <kbd>S</kbd>
+                            <span>Screenshot</span>
+                        </div>
+                        <div class="shortcut">
+                            <kbd>←</kbd>
+                            <span>Back 10s</span>
+                        </div>
+                        <div class="shortcut">
+                            <kbd>→</kbd>
+                            <span>Forward 10s</span>
+                        </div>
+                        <div class="shortcut">
+                            <kbd>↑</kbd>
+                            <span>Volume Up</span>
+                        </div>
+                        <div class="shortcut">
+                            <kbd>↓</kbd>
+                            <span>Volume Down</span>
+                        </div>
+                        <div class="shortcut">
+                            <kbd>0-9</kbd>
+                            <span>Jump to 0%-90%</span>
+                        </div>
+                        <div class="shortcut">
+                            <kbd>C</kbd>
+                            <span>Toggle Subtitles</span>
+                        </div>
+                    </div>
+                    <button class="close-shortcuts" id="closeShortcuts">
+                        <i class="fas fa-check"></i> Got it!
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div class="toast-container" id="toastContainer"></div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.4.10/dist/hls.min.js"></script>
+    <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+    <script src="player.js"></script>
+</body>
+</html>
