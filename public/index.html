@@ -21,7 +21,9 @@
         <!-- Header -->
         <header class="header">
             <div class="logo">
-                <img src="logo.svg" alt="FlexStream Logo" class="logo-icon">
+                <span class="logo-icon-wrap">
+                    <img src="logo.svg" alt="FlexStream Logo" class="logo-icon">
+                </span>
                 <span class="logo-text">FlexStream</span>
             </div>
             
@@ -56,10 +58,16 @@
             <!-- URL Input Section -->
             <section class="url-section" id="urlSection">
                 <div class="url-container">
+                    <div class="logo-mark" aria-hidden="true">
+                        <span class="logo-mark-play"><i class="fas fa-play"></i></span>
+                    </div>
                     <h1 class="title">
-                        <span class="title-gradient">FlexStream</span>
+                        <span class="title-gradient" data-text="FlexStream">FlexStream</span>
                         <span class="title-sub">Universal Video Player</span>
                     </h1>
+                    <div class="sprocket-row" aria-hidden="true">
+                        <span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span><span></span>
+                    </div>
                     <p class="subtitle">Paste any video URL. No limits, no compromises.</p>
                     
                     <div class="url-input-wrapper">
@@ -138,6 +146,12 @@
 
             <!-- Video Player Section -->
             <section class="player-section" id="playerSection">
+                <!-- Back Button -->
+                <button class="back-btn" id="backBtn">
+                    <i class="fas fa-arrow-left"></i>
+                    <span>Back to Input</span>
+                </button>
+
                 <div class="player-container" id="playerContainer">
                     <!-- Video Element -->
                     <video 
@@ -412,12 +426,6 @@
                         </div>
                     </div>
                 </div>
-
-                <!-- Back Button -->
-                <button class="back-btn" id="backBtn">
-                    <i class="fas fa-arrow-left"></i>
-                    <span>Back to Input</span>
-                </button>
             </section>
         </main>
 

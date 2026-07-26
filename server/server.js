@@ -10,11 +10,19 @@ const url = require('url');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const dns = require('dns').promises;
 
-const PORT = 4000;
+const PORT = parseInt(process.env.PORT, 10) || 4000;
 const CACHE_DIR = path.join(__dirname, '.cache');
-const MAX_CACHE_SIZE = 100 * 1024 * 1024; // 100MB
+const MAX_CACHE_SIZE = parseInt(process.env.MAX_CACHE_SIZE, 10) || 100 * 1024 * 1024; // 100MB
 const REQUEST_TIMEOUT = 30000; // 30 seconds
+const MAX_REDIRECTS = 5;
+
+// Admin API token — required for /api/stats and /api/clear-cache.
+// Set ADMIN_TOKEN in the environment; otherwise a random one is generated
+// each run and printed to the console so the server is never open by default.
+const ADMIN_TOKEN = process.env.ADMIN_TOKEN || crypto.randomBytes(24).toString('hex');
+const ADMIN_TOKEN_WAS_GENERATED = !process.env.ADMIN_TOKEN;
 
 // Ensure cache directory exists
 if (!fs.existsSync(CACHE_DIR)) {
@@ -24,17 +32,30 @@ if (!fs.existsSync(CACHE_DIR)) {
 // Rate limiting
 const rateLimit = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const RATE_LIMIT_MAX = 100; // 100 requests per minute per IP
+const RATE_LIMIT_MAX = parseInt(process.env.RATE_LIMIT_MAX, 10) || 100; // 100 requests per minute per IP
 
 // Security configuration
 const SECURITY = {
-    // Blocked domains (add domains you want to block)
-    blockedDomains: [
-        'localhost',
-        '127.0.0.1',
-        '192.168.0.0/16',
-        '10.0.0.0/8',
-        '172.16.0.0/12'
+    // Hostnames blocked outright, regardless of what they resolve to
+    blockedHostnames: [
+        'localhost'
+    ],
+
+    // Private / internal IP ranges — every proxied request is resolved via
+    // DNS first and checked against these, on the *initial* request and on
+    // every redirect hop, so a hostname can't be used to smuggle a client
+    // to an internal address (DNS rebinding / SSRF).
+    blockedCidrs: [
+        '127.0.0.0/8',      // loopback
+        '10.0.0.0/8',       // private
+        '172.16.0.0/12',    // private
+        '192.168.0.0/16',   // private
+        '169.254.0.0/16',   // link-local (cloud metadata lives here)
+        '100.64.0.0/10',    // carrier-grade NAT
+        '0.0.0.0/8',        // "this" network
+        '::1/128',          // IPv6 loopback
+        'fc00::/7',         // IPv6 unique local
+        'fe80::/10'         // IPv6 link-local
     ],
     
     // Allowed content types
@@ -231,20 +252,103 @@ class CacheManager {
 const cacheManager = new CacheManager();
 
 // Security functions
-function isBlockedDomain(hostname) {
-    for (const blocked of SECURITY.blockedDomains) {
-        if (blocked.includes('/')) {
-            // CIDR notation
-            const [blockedIp, mask] = blocked.split('/');
-            // Simplified CIDR check (for demo)
-            if (hostname.startsWith(blockedIp.split('.')[0])) {
-                return true;
-            }
-        } else if (hostname === blocked) {
+
+// Convert a dotted IPv4 address to a 32-bit unsigned integer.
+function ipv4ToInt(ip) {
+    const parts = ip.split('.').map(Number);
+    if (parts.length !== 4 || parts.some(p => Number.isNaN(p) || p < 0 || p > 255)) return null;
+    return ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
+}
+
+// Expand an IPv6 address to its full 8-group form as a BigInt for comparison.
+function ipv6ToBigInt(ip) {
+    try {
+        let [head, tail] = ip.split('::');
+        let headParts = head ? head.split(':') : [];
+        let tailParts = tail ? tail.split(':') : [];
+        if (!ip.includes('::')) {
+            headParts = ip.split(':');
+            tailParts = [];
+        }
+        const missing = 8 - headParts.length - tailParts.length;
+        const groups = [...headParts, ...Array(Math.max(missing, 0)).fill('0'), ...tailParts];
+        if (groups.length !== 8) return null;
+        return groups.reduce((acc, g) => (acc << 16n) | BigInt(parseInt(g || '0', 16)), 0n);
+    } catch {
+        return null;
+    }
+}
+
+function isIpv4InCidr(ip, cidr) {
+    const [range, bitsStr] = cidr.split('/');
+    const ipInt = ipv4ToInt(ip);
+    const rangeInt = ipv4ToInt(range);
+    if (ipInt === null || rangeInt === null) return false;
+    const bits = parseInt(bitsStr, 10);
+    const mask = bits === 0 ? 0 : (~0 << (32 - bits)) >>> 0;
+    return (ipInt & mask) === (rangeInt & mask);
+}
+
+function isIpv6InCidr(ip, cidr) {
+    const [range, bitsStr] = cidr.split('/');
+    const ipBig = ipv6ToBigInt(ip);
+    const rangeBig = ipv6ToBigInt(range);
+    if (ipBig === null || rangeBig === null) return false;
+    const bits = BigInt(parseInt(bitsStr, 10));
+    const mask = bits === 0n ? 0n : (~0n << (128n - bits)) & ((1n << 128n) - 1n);
+    return (ipBig & mask) === (rangeBig & mask);
+}
+
+function isIpBlocked(ip) {
+    const isV6 = ip.includes(':');
+    for (const cidr of SECURITY.blockedCidrs) {
+        const cidrIsV6 = cidr.includes(':');
+        if (isV6 !== cidrIsV6) continue;
+        if (isV6 ? isIpv6InCidr(ip, cidr) : isIpv4InCidr(ip, cidr)) {
             return true;
         }
     }
     return false;
+}
+
+// Resolves the hostname and checks both the hostname allowlist/blocklist and
+// the resolved IP against internal ranges. Used before the initial request
+// AND before following every redirect hop, so a redirect can't smuggle the
+// proxy into fetching an internal address after an initial clean check.
+async function assertHostAllowed(hostname) {
+    if (SECURITY.blockedHostnames.includes(hostname.toLowerCase())) {
+        throw new Error(`Access to '${hostname}' is blocked`);
+    }
+
+    // If the "hostname" is already a literal IP, check it directly.
+    if (/^[\d.]+$/.test(hostname) || hostname.includes(':')) {
+        if (isIpBlocked(hostname)) {
+            throw new Error(`Access to ${hostname} is blocked`);
+        }
+        return;
+    }
+
+    let addresses;
+    try {
+        addresses = await dns.lookup(hostname, { all: true, verbatim: true });
+    } catch (err) {
+        throw new Error(`Could not resolve host '${hostname}'`);
+    }
+
+    for (const { address } of addresses) {
+        if (isIpBlocked(address)) {
+            throw new Error(`'${hostname}' resolves to a blocked internal address`);
+        }
+    }
+}
+
+// Constant-time-ish token compare for the admin endpoints.
+function isValidAdminToken(token) {
+    if (!token || typeof token !== 'string') return false;
+    const a = Buffer.from(token);
+    const b = Buffer.from(ADMIN_TOKEN);
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
 }
 
 function checkRateLimit(ip) {
@@ -313,27 +417,43 @@ const server = http.createServer(async (req, res) => {
         return;
     }
     
-    // API endpoints
-    if (pathname === '/api/stats') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({
-            cache: cacheManager.getStats(),
-            rateLimits: Array.from(rateLimit.entries()).map(([ip, requests]) => ({
-                ip,
-                requestsLastMinute: requests.length
-            }))
-        }));
-        return;
-    }
-    
-    if (pathname === '/api/clear-cache') {
-        const entries = Array.from(cacheManager.cache.keys());
-        for (const key of entries) {
-            cacheManager.delete(cacheManager.cache.get(key).url);
+    // API endpoints — admin-only, require a valid token via
+    // `Authorization: Bearer <token>`, `X-Admin-Token` header, or `?token=`.
+    if (pathname === '/api/stats' || pathname === '/api/clear-cache') {
+        const bearer = (req.headers['authorization'] || '').replace(/^Bearer\s+/i, '');
+        const providedToken = req.headers['x-admin-token'] || bearer || parsedUrl.query.token;
+
+        if (!isValidAdminToken(providedToken)) {
+            res.writeHead(401, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                error: 'Unauthorized',
+                message: 'A valid admin token is required for this endpoint.'
+            }));
+            console.log(`🔒 Rejected unauthenticated admin request to ${pathname} from ${clientIp}`);
+            return;
         }
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ message: 'Cache cleared successfully' }));
-        return;
+
+        if (pathname === '/api/stats') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({
+                cache: cacheManager.getStats(),
+                rateLimits: Array.from(rateLimit.entries()).map(([ip, requests]) => ({
+                    ip,
+                    requestsLastMinute: requests.length
+                }))
+            }));
+            return;
+        }
+
+        if (pathname === '/api/clear-cache') {
+            const entries = Array.from(cacheManager.cache.keys());
+            for (const key of entries) {
+                cacheManager.delete(cacheManager.cache.get(key).url);
+            }
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ message: 'Cache cleared successfully' }));
+            return;
+        }
     }
     
     // Proxy endpoint
@@ -383,10 +503,13 @@ const server = http.createServer(async (req, res) => {
     // Serve static files
     let filePath = pathname === '/' ? '/index.html' : pathname;
     filePath = path.join(__dirname, 'public', filePath);
-    
-    // Security: prevent directory traversal
-    const normalizedPath = path.normalize(filePath);
-    if (!normalizedPath.startsWith(path.join(__dirname, 'public'))) {
+
+    // Security: prevent directory traversal. Resolve fully and require the
+    // result to sit *inside* the public root — comparing with a trailing
+    // separator so "public-evil" can't pass a bare startsWith check.
+    const publicRoot = path.resolve(__dirname, 'public') + path.sep;
+    const normalizedPath = path.resolve(filePath);
+    if (!(normalizedPath + path.sep).startsWith(publicRoot) && normalizedPath !== publicRoot.slice(0, -1)) {
         res.writeHead(403);
         res.end('Forbidden');
         return;
@@ -415,16 +538,20 @@ const server = http.createServer(async (req, res) => {
     });
 });
 
-async function proxyVideo(videoUrl, clientReq, clientRes, clientIp) {
+async function proxyVideo(videoUrl, clientReq, clientRes, clientIp, redirectCount = 0) {
+    if (redirectCount > MAX_REDIRECTS) {
+        throw new Error('Too many redirects');
+    }
+
+    const parsedUrl = url.parse(videoUrl);
+
+    // Security check — resolves the hostname and blocks internal/loopback
+    // targets. Re-run on every redirect hop by the caller below, so a
+    // redirect can't smuggle the proxy into an internal address after the
+    // first hop passed.
+    await assertHostAllowed(parsedUrl.hostname);
+
     return new Promise((resolve, reject) => {
-        const parsedUrl = url.parse(videoUrl);
-        
-        // Security checks
-        if (isBlockedDomain(parsedUrl.hostname)) {
-            reject(new Error('Access to this domain is blocked'));
-            return;
-        }
-        
         const protocol = parsedUrl.protocol === 'https:' ? https : http;
         
         // Prepare headers
@@ -465,7 +592,7 @@ async function proxyVideo(videoUrl, clientReq, clientRes, clientIp) {
                 }
                 
                 console.log(`🔄 Redirecting to: ${redirectUrl}`);
-                proxyVideo(redirectUrl, clientReq, clientRes, clientIp)
+                proxyVideo(redirectUrl, clientReq, clientRes, clientIp, redirectCount + 1)
                     .then(resolve)
                     .catch(reject);
                 return;
@@ -590,17 +717,24 @@ server.listen(PORT, () => {
 ║                                                                ║
 ║   📍 Local:  http://localhost:${PORT}                          ║
 ║   🔗 Proxy:  http://localhost:${PORT}/proxy?url=VIDEO_URL       ║
-║   📊 Stats:  http://localhost:${PORT}/api/stats                ║
+║   📊 Stats:  http://localhost:${PORT}/api/stats?token=...      ║
 ║                                                                ║
-║   🔒 Security features enabled                                ║
+║   🔒 Security features enabled (resolved-IP SSRF guard)       ║
 ║   💾 Caching enabled (${cacheManager.formatBytes(MAX_CACHE_SIZE)})            ║
-║   ⏱️  Rate limiting enabled                                   ║
+║   ⏱️  Rate limiting enabled (${RATE_LIMIT_MAX}/min per IP)              ║
 ║                                                                ║
 ║   Press Ctrl+C to stop                                       ║
 ║                                                                ║
 ╚════════════════════════════════════════════════════════════════╝
     `);
-    
+
+    if (ADMIN_TOKEN_WAS_GENERATED) {
+        console.log(`🔑 Generated admin token (no ADMIN_TOKEN env var set):`);
+        console.log(`   ${ADMIN_TOKEN}`);
+        console.log(`   Use it as ?token=... or an X-Admin-Token header on /api/stats and /api/clear-cache.`);
+        console.log(`   Set ADMIN_TOKEN in your environment to use a fixed value instead.\n`);
+    }
+
     // Log cache stats
     const stats = cacheManager.getStats();
     console.log(`📦 Cache: ${stats.count} files, ${stats.totalSize}`);

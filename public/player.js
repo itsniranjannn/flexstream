@@ -409,7 +409,7 @@ class FlexStreamPlayer {
             
             this.state.duration = video.duration;
             this.elements.durationEl.textContent = this.formatTime(video.duration);
-            
+
             this.detectVideoFormat();
             this.updateVideoInfo();
             this.hideLoading();
@@ -570,19 +570,29 @@ class FlexStreamPlayer {
         
         // Configure for streaming
         video.preload = 'auto';
-        video.crossOrigin = 'anonymous';
-        
-        // Check for special URLs
+
+        // Local files (uploaded via the file picker) come in as blob: URLs.
+        // They're same-origin and never send CORS headers, so requesting
+        // crossOrigin="anonymous" on them makes the browser reject the load
+        // entirely — that's what was breaking "Upload Local" playback.
+        const isLocalSource = url.startsWith('blob:') || url.startsWith('file:');
+
+        // Check for special URLs that also don't play nicely with CORS mode
         const isGoogleUrl = url.includes('googleusercontent.com') || 
                            url.includes('googlevideo.com');
-        
-        if (isGoogleUrl) {
-            console.log('🔗 Google video detected');
+
+        if (isLocalSource || isGoogleUrl) {
+            if (isLocalSource) console.log('📁 Local file detected — skipping crossOrigin');
+            if (isGoogleUrl) console.log('🔗 Google video detected');
             video.removeAttribute('crossorigin');
+        } else {
+            video.crossOrigin = 'anonymous';
         }
         
-        // Check server capabilities
-        await this.checkServerCapabilities(url);
+        // Check server capabilities (skip for local files — nothing to check)
+        if (!isLocalSource) {
+            await this.checkServerCapabilities(url);
+        }
         
         // Set source and load
         video.src = url;
@@ -1536,7 +1546,12 @@ class FlexStreamPlayer {
         container.innerHTML = '';
         
         if (history.length === 0) {
-            container.innerHTML = '<div class="empty-history">No history yet</div>';
+            container.innerHTML = `
+                <div class="empty-history">
+                    <i class="fas fa-clock"></i>
+                    <span>No screenings logged yet. Watch history shows up here.</span>
+                </div>
+            `;
             return;
         }
         
@@ -1606,6 +1621,16 @@ class FlexStreamPlayer {
         const container = this.elements.recentList;
         
         container.innerHTML = '';
+
+        if (recent.length === 0) {
+            container.innerHTML = `
+                <div class="empty-recent">
+                    <i class="fas fa-film"></i>
+                    <span>Nothing screened yet — paste a URL above to start your reel.</span>
+                </div>
+            `;
+            return;
+        }
         
         recent.forEach(item => {
             const element = document.createElement('div');
