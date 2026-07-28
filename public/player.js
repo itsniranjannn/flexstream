@@ -24,7 +24,9 @@ class FlexStreamPlayer {
             networkSpeed: 0,
             videoFormat: 'unknown',
             videoSize: 0,
-            qualityLevel: 'auto'
+            qualityLevel: 'auto',
+            currentFile: null, // the original File, if loaded via the file picker
+            isFixingAudio: false
         };
 
         // DOM Elements - Organized by sections
@@ -137,6 +139,7 @@ class FlexStreamPlayer {
             retryBtn: document.getElementById('retryBtn'),
             reportBtn: document.getElementById('reportBtn'),
             backBtn: document.getElementById('backBtn'),
+            headerLogo: document.getElementById('headerLogo'),
             
             // Toast
             toastContainer: document.getElementById('toastContainer'),
@@ -390,6 +393,14 @@ class FlexStreamPlayer {
         this.elements.retryBtn.addEventListener('click', () => this.loadVideo());
         this.elements.reportBtn.addEventListener('click', () => this.reportIssue());
         this.elements.backBtn.addEventListener('click', () => this.showUrlSection());
+
+        if (this.elements.headerLogo) {
+            this.elements.headerLogo.addEventListener('click', () => {
+                if (this.elements.playerSection.classList.contains('active')) {
+                    this.showUrlSection();
+                }
+            });
+        }
         
         // Keyboard Shortcuts
         document.addEventListener('keydown', (e) => this.handleKeyboard(e));
@@ -557,6 +568,13 @@ class FlexStreamPlayer {
         
         // Store original URL
         this.state.originalUrl = url;
+
+        // We only keep a File reference around for blob: sources that came
+        // from the file picker (needed for the in-browser audio-fix path).
+        // Any other URL means a fresh source, so drop the stale reference.
+        if (!url.startsWith('blob:')) {
+            this.state.currentFile = null;
+        }
         
         // Check if proxy should be used
         const useProxy = this.elements.useProxyCheckbox && this.elements.useProxyCheckbox.checked;
@@ -1083,10 +1101,13 @@ class FlexStreamPlayer {
             !this.elements.video.muted && this.state.currentVolume > 0;
 
         if (decodedBytes === 0 && userHasSoundOn) {
+            const canAutoFix = !!this.state.currentFile && !this.state.isFixingAudio;
             this.showToast(
                 'No audio decoded',
-                "This file's audio track likely uses a codec your browser can't play (e.g. AC-3, DTS or TrueHD in an MP4/MKV rip). The video works because its video codec is separate — try a copy with an AAC or Opus audio track.",
-                'warning'
+                "This file's audio track likely uses a codec your browser can't play (e.g. AC-3, DTS or TrueHD in an MP4/MKV rip). The video works because its video codec is separate." +
+                    (canAutoFix ? '' : ' Try a copy with an AAC/Opus audio track, or re-encode with HandBrake/VLC.'),
+                'warning',
+                canAutoFix ? { label: 'Fix audio', onClick: () => this.fixAudioCodec() } : null
             );
             this.updateAudioStatusInSidebar('Unsupported codec');
         } else if (decodedBytes !== null && decodedBytes > 0) {
@@ -1100,6 +1121,97 @@ class FlexStreamPlayer {
         }
     }
 
+    // Lazily load ffmpeg.wasm only when someone actually needs the audio
+    // fix — it's a multi-MB library and most videos never need it.
+    ensureFFmpegLoaded() {
+        if (typeof FFmpeg !== 'undefined') return Promise.resolve();
+        if (this._ffmpegLoadPromise) return this._ffmpegLoadPromise;
+
+        this._ffmpegLoadPromise = new Promise((resolve, reject) => {
+            const script = document.createElement('script');
+            script.src = 'https://unpkg.com/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js';
+            script.onload = () => resolve();
+            script.onerror = () => reject(new Error('Failed to load the audio converter.'));
+            document.head.appendChild(script);
+        });
+
+        return this._ffmpegLoadPromise;
+    }
+
+    // Re-encodes ONLY the audio track to AAC (universally supported) while
+    // copying the video stream untouched — fast, and no video-quality loss.
+    // This only works for files loaded via the file picker, since we need
+    // the original File to feed into ffmpeg.wasm; a remote URL would have
+    // to be fully downloaded first, which isn't practical for large files.
+    async fixAudioCodec() {
+        if (!this.state.currentFile || this.state.isFixingAudio) return;
+        this.state.isFixingAudio = true;
+
+        this.showToast(
+            'Fixing audio…',
+            'Loading the converter (first time only) and re-encoding just the audio track. This can take a little while for larger files.',
+            'info'
+        );
+
+        const wasPlaying = !this.elements.video.paused;
+        const resumeAt = this.elements.video.currentTime;
+        const sourceFile = this.state.currentFile;
+
+        try {
+            await this.ensureFFmpegLoaded();
+
+            const { createFFmpeg, fetchFile } = FFmpeg;
+            if (!this.ffmpegInstance) {
+                this.ffmpegInstance = createFFmpeg({ log: false });
+            }
+            const ffmpeg = this.ffmpegInstance;
+            if (!ffmpeg.isLoaded()) {
+                await ffmpeg.load();
+            }
+
+            const ext = (sourceFile.name.match(/\.[a-z0-9]+$/i) || ['.mp4'])[0];
+            const inName = `input${ext}`;
+            const outName = 'output.mp4';
+
+            ffmpeg.FS('writeFile', inName, await fetchFile(sourceFile));
+            await ffmpeg.run(
+                '-i', inName,
+                '-c:v', 'copy',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                '-movflags', '+faststart',
+                outName
+            );
+
+            const data = ffmpeg.FS('readFile', outName);
+            const blob = new Blob([data.buffer], { type: 'video/mp4' });
+            const fixedUrl = URL.createObjectURL(blob);
+
+            // Clean up ffmpeg's virtual FS to free memory before the next run
+            try { ffmpeg.FS('unlink', inName); ffmpeg.FS('unlink', outName); } catch (_) {}
+
+            this.state.currentFile = null; // it's a plain remuxed blob now, nothing left to fix
+            this.elements.urlInput.value = fixedUrl;
+            await this.loadVideo();
+
+            this.elements.video.addEventListener('loadedmetadata', () => {
+                this.elements.video.currentTime = resumeAt;
+                if (wasPlaying) this.elements.video.play().catch(() => {});
+            }, { once: true });
+
+            this.showToast('Audio fixed', 'Re-encoded the audio track to AAC — playback should have sound now.', 'success');
+        } catch (error) {
+            console.error('Audio fix failed:', error);
+            this.showToast(
+                "Couldn't fix audio",
+                'The in-browser converter ran into an error. You can also fix this externally with HandBrake or VLC by re-encoding the audio track to AAC.',
+                'error'
+            );
+        } finally {
+            this.state.isFixingAudio = false;
+        }
+    }
+
 
 
     startBufferManagement() {
@@ -1108,10 +1220,14 @@ class FlexStreamPlayer {
             clearInterval(this.bufferManager.checkInterval);
         }
         
-        // Check buffer every 500ms
+        // Check buffer once per second. This does DOM writes (stats,
+        // buffer-bar updates) on the main thread — the same thread that's
+        // also feeding a high-bitrate 4K/8K decode. Polling twice a second
+        // was unnecessary overhead; once a second is still plenty
+        // responsive for a progress/stats UI.
         this.bufferManager.checkInterval = setInterval(() => {
             this.manageBuffer();
-        }, 500);
+        }, 1000);
     }
 
     stopBufferManagement() {
@@ -1655,13 +1771,15 @@ class FlexStreamPlayer {
             element.innerHTML = `
                 <div class="playlist-thumb"></div>
                 <div class="playlist-info">
-                    <div class="playlist-title">${item.title}</div>
-                    <div class="playlist-duration">${this.formatTime(item.duration)}</div>
+                    <div class="playlist-title"></div>
+                    <div class="playlist-duration"></div>
                 </div>
                 <button class="playlist-remove" data-index="${index}">
                     <i class="fas fa-times"></i>
                 </button>
             `;
+            element.querySelector('.playlist-title').textContent = item.title;
+            element.querySelector('.playlist-duration').textContent = this.formatTime(item.duration);
             
             element.addEventListener('click', () => {
                 this.elements.urlInput.value = item.url;
@@ -1767,15 +1885,22 @@ class FlexStreamPlayer {
             element.innerHTML = `
                 <div class="history-thumb"></div>
                 <div class="history-info">
-                    <div class="history-title">${item.title}</div>
-                    <div class="history-url">${this.truncateUrl(item.url, 50)}</div>
+                    <div class="history-title"></div>
+                    <div class="history-url"></div>
                     <div class="history-meta">
-                        <span class="history-date">${new Date(item.timestamp).toLocaleDateString()}</span>
-                        <span class="history-duration">${this.formatTime(item.duration)}</span>
-                        ${item.format ? `<span class="history-format">${item.format}</span>` : ''}
+                        <span class="history-date"></span>
+                        <span class="history-duration"></span>
+                        ${item.format ? `<span class="history-format"></span>` : ''}
                     </div>
                 </div>
             `;
+            element.querySelector('.history-title').textContent = item.title;
+            element.querySelector('.history-url').textContent = this.truncateUrl(item.url, 50);
+            element.querySelector('.history-date').textContent = new Date(item.timestamp).toLocaleDateString();
+            element.querySelector('.history-duration').textContent = this.formatTime(item.duration);
+            if (item.format) {
+                element.querySelector('.history-format').textContent = item.format;
+            }
             
             element.addEventListener('click', () => {
                 this.elements.urlInput.value = item.url;
@@ -1952,6 +2077,7 @@ class FlexStreamPlayer {
         
         // Create object URL
         const objectUrl = URL.createObjectURL(file);
+        this.state.currentFile = file;
         
         // Update UI
         this.elements.urlInput.value = objectUrl;
@@ -2312,7 +2438,7 @@ class FlexStreamPlayer {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
-    showToast(title, message, type = 'info') {
+    showToast(title, message, type = 'info', action = null) {
         const toast = document.createElement('div');
         toast.className = `toast ${type}`;
         
@@ -2328,6 +2454,7 @@ class FlexStreamPlayer {
             <div class="toast-content">
                 <div class="toast-title">${title}</div>
                 <div class="toast-message">${message}</div>
+                ${action ? `<button class="toast-action">${action.label}</button>` : ''}
             </div>
             <button class="toast-close">
                 <i class="fas fa-times"></i>
@@ -2339,16 +2466,26 @@ class FlexStreamPlayer {
             toast.classList.add('fade-out');
             setTimeout(() => toast.remove(), 300);
         });
+
+        if (action) {
+            const actionBtn = toast.querySelector('.toast-action');
+            actionBtn.addEventListener('click', () => {
+                action.onClick();
+                toast.classList.add('fade-out');
+                setTimeout(() => toast.remove(), 300);
+            });
+        }
         
         this.elements.toastContainer.appendChild(toast);
         
-        // Auto-remove after 5 seconds
+        // Auto-remove after 5 seconds (8s if it has an action, to give
+        // people time to notice and click it)
         setTimeout(() => {
             if (toast.parentNode) {
                 toast.classList.add('fade-out');
                 setTimeout(() => toast.remove(), 300);
             }
-        }, 5000);
+        }, action ? 8000 : 5000);
     }
 
     resetTracking() {
@@ -2482,12 +2619,13 @@ document.addEventListener('DOMContentLoaded', () => {
             <div style="padding: 2rem; text-align: center; color: white; background: #1a1a2e;">
                 <h1>FlexStream Error</h1>
                 <p>Failed to initialize the video player.</p>
-                <p><small>${error.message}</small></p>
+                <p><small id="fsCrashMsg"></small></p>
                 <button onclick="location.reload()" style="padding: 0.5rem 1rem; background: #6366f1; border: none; color: white; border-radius: 4px; cursor: pointer;">
                     Reload Page
                 </button>
             </div>
         `;
+        document.getElementById('fsCrashMsg').textContent = error.message;
     }
 });
 

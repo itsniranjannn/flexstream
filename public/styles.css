@@ -117,37 +117,41 @@ a { color: inherit; }
 
 /* ---- Light theme ---- */
 body.theme-light {
-  --void:            #F7F5F1;
+  --void:            #F5F3EE;
   --void-soft:       #FCFAF7;
   --surface:         #FFFFFF;
   --surface-raised:  #FFFFFF;
-  --surface-hover:   #F0EEE9;
-  --line:            rgba(20, 20, 20, 0.08);
-  --line-strong:     rgba(20, 20, 20, 0.16);
+  --surface-hover:   #F3EEE4;
+  --line:            rgba(20, 20, 20, 0.09);
+  --line-strong:     rgba(20, 20, 20, 0.18);
 
-  --beam:            #E07B2A;
-  --beam-soft:       #C7601A;
-  --beam-dim:        rgba(224, 123, 42, 0.12);
-  --beam-glow:       rgba(224, 123, 42, 0.28);
+  --beam:            #F2790E;
+  --beam-soft:       #D9600A;
+  --beam-dim:        rgba(242, 121, 14, 0.14);
+  --beam-glow:       rgba(242, 121, 14, 0.38);
 
-  --signal:          #12958A;
-  --signal-dim:      rgba(18, 149, 138, 0.12);
+  --signal:          #0E9C8E;
+  --signal-dim:      rgba(14, 156, 142, 0.14);
 
-  --ink:             #1B1D22;
-  --ink-dim:         #5C6270;
-  --ink-faint:       #9096A3;
+  --accent-violet:   #7C5CFF;
+  --accent-violet-glow: rgba(124, 92, 255, 0.25);
+
+  --ink:             #17181D;
+  --ink-dim:         #565C6B;
+  --ink-faint:       #8B92A3;
 
   color-scheme: light;
 }
 
 body.theme-light .bg-gradient {
   background:
-    radial-gradient(ellipse 900px 600px at 18% -10%, rgba(224, 123, 42, 0.08), transparent 60%),
-    radial-gradient(ellipse 700px 500px at 100% 100%, rgba(18, 149, 138, 0.05), transparent 60%),
+    radial-gradient(ellipse 1000px 650px at 12% -8%, rgba(242, 121, 14, 0.16), transparent 60%),
+    radial-gradient(ellipse 800px 550px at 100% 10%, rgba(124, 92, 255, 0.10), transparent 60%),
+    radial-gradient(ellipse 700px 500px at 100% 100%, rgba(14, 156, 142, 0.10), transparent 60%),
     var(--void);
 }
 
-body.theme-light .bg-glow { opacity: 0.5; }
+body.theme-light .bg-glow { opacity: 0.75; }
 
 body.theme-light .video-element,
 body.theme-light #playerContainer { background: #000; }
@@ -239,6 +243,92 @@ body.theme-light .speed-menu {
   50% { transform: rotate(8deg) scale(1.05); opacity: 1; }
 }
 
+/* Two large, pre-blurred color blobs drifting slowly behind everything.
+   The blur is a static filter value baked into their own compositor
+   layer (via will-change) — the animation only moves/scales that
+   layer, it never re-runs the blur per frame, so this stays cheap even
+   while a 4K/8K video is decoding on the main thread. */
+.bg-aura {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-background);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.bg-aura::before,
+.bg-aura::after {
+  content: '';
+  position: absolute;
+  width: 620px;
+  height: 620px;
+  border-radius: 50%;
+  filter: blur(100px);
+  will-change: transform;
+}
+
+.bg-aura::before {
+  top: -12%;
+  left: -8%;
+  background: radial-gradient(circle, var(--beam-glow), transparent 70%);
+  opacity: 0.55;
+  animation: auraFloatA 24s ease-in-out infinite;
+}
+
+.bg-aura::after {
+  bottom: -18%;
+  right: -10%;
+  background: radial-gradient(circle, var(--accent-violet-glow, rgba(124,92,255,0.25)), transparent 70%);
+  opacity: 0.4;
+  animation: auraFloatB 28s ease-in-out infinite;
+}
+
+@keyframes auraFloatA {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(70px, 50px) scale(1.15); }
+}
+
+@keyframes auraFloatB {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-60px, -40px) scale(1.12); }
+}
+
+body.theme-light .bg-aura::before { opacity: 0.7; }
+body.theme-light .bg-aura::after { opacity: 0.55; }
+
+/* These read as flat grey-on-white in the plain light palette — give them
+   a bit of the accent color so the light theme doesn't feel washed out. */
+body.theme-light .format-tag {
+  background: linear-gradient(135deg, #FFFFFF, var(--surface-hover));
+}
+
+body.theme-light .format-tag i { color: var(--beam-soft); opacity: 0.85; }
+
+body.theme-light .info-item {
+  background: linear-gradient(135deg, #FFFFFF, var(--surface-hover));
+}
+
+body.theme-light .info-item:hover {
+  border-color: var(--beam-dim);
+  box-shadow: 0 6px 18px -10px var(--beam-glow);
+}
+
+body.theme-light .ctrl-btn:hover {
+  color: var(--beam-soft);
+  background: var(--beam-dim);
+}
+
+body.theme-light .quality-option.active,
+body.theme-light .speed-option.active {
+  color: #FFFFFF;
+}
+
+body:has(.player-container.playing) .bg-aura::before,
+body:has(.player-container.playing) .bg-aura::after,
+body:has(.player-container.playing) .bg-glow {
+  animation-play-state: paused;
+}
+
 /* film-sprocket divider motif is defined in the hero section below,
    with the animated travelling light variant */
 
@@ -260,6 +350,25 @@ body.theme-light .speed-menu {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  cursor: pointer;
+  transition: transform 0.25s var(--ease-snap);
+}
+
+.logo:hover { transform: translateY(-1px); }
+.logo:active { transform: translateY(0) scale(0.97); }
+
+.logo:hover .logo-text {
+  background: linear-gradient(90deg, var(--ink) 0%, var(--beam-soft) 35%, var(--beam) 50%, var(--beam-soft) 65%, var(--ink) 100%);
+  background-size: 300% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: logoTextShimmer 1.8s linear infinite;
+}
+
+@keyframes logoTextShimmer {
+  0% { background-position: 0% 0; }
+  100% { background-position: -300% 0; }
 }
 
 .logo-icon-wrap {
@@ -421,7 +530,16 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
   border-radius: var(--radius-lg);
   background: linear-gradient(160deg, var(--surface-raised), var(--surface));
   border: 1px solid var(--line-strong);
+  cursor: pointer;
+  transition: transform 0.35s var(--ease-snap), box-shadow 0.35s var(--ease);
 }
+
+.logo-mark:hover {
+  transform: scale(1.08) rotate(-4deg);
+  box-shadow: 0 12px 32px -8px var(--beam-glow);
+}
+
+.logo-mark:active { transform: scale(0.95) rotate(0deg); }
 
 .logo-mark::before {
   content: '';
@@ -452,6 +570,16 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
   font-size: 22px;
   transform: translateX(2px);
   animation: playBob 2.6s ease-in-out infinite;
+}
+
+.logo-mark:hover .logo-mark-play {
+  animation: playBob 2.6s ease-in-out infinite, logoHueCycle 2.5s linear infinite;
+}
+
+@keyframes logoHueCycle {
+  0% { filter: hue-rotate(0deg) brightness(1); }
+  50% { filter: hue-rotate(35deg) brightness(1.25); }
+  100% { filter: hue-rotate(0deg) brightness(1); }
 }
 
 @keyframes playBob {
@@ -835,6 +963,8 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
   background: #000;
   object-fit: cover;
   object-position: center;
+  transform: translateZ(0);
+  will-change: transform;
 }
 
 /* Fixed frame — deliberately NOT driven by the video's native aspect
@@ -881,10 +1011,9 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
   font-family: var(--font-mono);
   font-size: 11px;
   color: rgba(255,255,255,0.55);
-  background: rgba(0,0,0,0.35);
+  background: rgba(0,0,0,0.55);
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-full);
-  backdrop-filter: blur(6px);
   pointer-events: none;
 }
 
@@ -897,11 +1026,10 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  background: rgba(0,0,0,0.5);
+  background: rgba(0,0,0,0.65);
   border-radius: var(--radius-full);
   font-size: 11px;
   color: var(--ink-dim);
-  backdrop-filter: blur(6px);
   opacity: 0;
   transition: opacity 0.3s var(--ease);
 }
@@ -1087,15 +1215,29 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
   inset: 0;
   width: 0%;
   background: linear-gradient(90deg, var(--beam), var(--beam-soft));
-  background-size: 200% 100%;
   border-radius: var(--radius-full);
   box-shadow: 0 0 12px var(--beam-glow);
-  animation: progressShimmer 3s linear infinite;
+  overflow: hidden;
+}
+
+/* Shimmer as a translated pseudo-element instead of an animated
+   background-position — transform animations are handled by the
+   compositor and don't force a repaint on every frame like
+   background-position does, which matters when the main thread is
+   also busy decoding a high-bitrate 4K/8K stream. */
+.progress-played::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+  transform: translateX(-150%);
+  animation: progressShimmer 2.8s ease-in-out infinite;
 }
 
 @keyframes progressShimmer {
-  0% { background-position: 0% 0; }
-  100% { background-position: -200% 0; }
+  0% { transform: translateX(-150%); }
+  100% { transform: translateX(350%); }
 }
 
 .progress-thumb {
@@ -1110,8 +1252,11 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
   transform: translate(-50%, -50%) scale(0);
   transition: transform 0.15s var(--ease-snap);
   box-shadow: 0 0 0 3px var(--beam-glow);
-  animation: thumbPulse 2s ease-in-out infinite;
 }
+
+/* Pulse only while actually being interacted with — no reason to keep
+   an infinite animation ticking on an invisible (scale(0)) element. */
+.progress-container:hover .progress-thumb { animation: thumbPulse 2s ease-in-out infinite; }
 
 @keyframes thumbPulse {
   0%, 100% { box-shadow: 0 0 0 3px var(--beam-glow); }
@@ -1119,6 +1264,7 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
 }
 
 .progress-container:hover .progress-thumb { transform: translate(-50%, -50%) scale(1); }
+
 
 .progress-tooltip {
   position: absolute;
@@ -2034,16 +2180,67 @@ kbd {
 
 .toast {
   display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-5);
+  align-items: flex-start;
+  gap: var(--space-3);
+  max-width: 380px;
+  padding: var(--space-3) var(--space-4);
   background: var(--surface-raised);
   border: 1px solid var(--line-strong);
-  border-radius: var(--radius-full);
+  border-radius: var(--radius-lg);
   font-size: 13px;
   box-shadow: 0 12px 32px -8px rgba(0,0,0,0.6);
   animation: toastIn 0.3s var(--ease-snap);
+  pointer-events: auto;
 }
+
+.toast-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+  font-size: 15px;
+}
+
+.toast-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.toast-title {
+  font-weight: 700;
+  color: var(--ink);
+}
+
+.toast-message {
+  color: var(--ink-dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.toast-action {
+  align-self: flex-start;
+  margin-top: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  background: var(--beam-dim);
+  color: var(--beam-soft);
+  border: 1px solid var(--beam-glow);
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-weight: 700;
+  transition: all 0.15s var(--ease);
+}
+
+.toast-action:hover { background: var(--beam); color: var(--void); transform: translateY(-1px); }
+
+.toast-close {
+  flex-shrink: 0;
+  color: var(--ink-faint);
+  font-size: 11px;
+  padding: 2px;
+  transition: color 0.15s var(--ease);
+}
+
+.toast-close:hover { color: var(--ink); }
 
 .toast.fade-out { animation: toastOut 0.25s var(--ease) forwards; }
 
