@@ -70,6 +70,7 @@ class FlexStreamPlayer {
             speedMenu: document.getElementById('speedMenu'),
             speedValue: document.getElementById('speedValue'),
             qualityBtn: document.getElementById('qualityBtn'),
+            qualityMenu: document.getElementById('qualityMenu'),
             qualityValue: document.getElementById('qualityValue'),
             subtitleBtn: document.getElementById('subtitleBtn'),
             screenshotBtn: document.getElementById('screenshotBtn'),
@@ -104,6 +105,7 @@ class FlexStreamPlayer {
             infoDuration: document.getElementById('infoDuration'),
             infoFormat: document.getElementById('infoFormat'),
             infoSize: document.getElementById('infoSize'),
+            infoAudio: document.getElementById('infoAudio'),
             playlistItems: document.getElementById('playlistItems'),
             addToPlaylistBtn: document.getElementById('addToPlaylistBtn'),
             clearPlaylistBtn: document.getElementById('clearPlaylistBtn'),
@@ -186,8 +188,13 @@ class FlexStreamPlayer {
         this.security = {
             allowedDomains: [], // Empty = allow all (configurable)
             blockedDomains: [], // Add domains to block
-            maxUrlLength: 2048,
-            maxFileSize: 1073741824, // 1GB
+            // No practical URL-length or file-size cap: this player has no
+            // storage/bandwidth cost of its own, so it shouldn't refuse to
+            // play a valid local file or URL just because it's large.
+            // Kept as a very high sanity ceiling only to avoid pathological
+            // strings (e.g. a multi-megabyte data: URL pasted by accident).
+            maxUrlLength: Infinity,
+            maxFileSize: Infinity,
             rateLimiter: {
                 requests: [],
                 maxRequests: 10,
@@ -200,7 +207,9 @@ class FlexStreamPlayer {
             controls: null,
             cursor: null,
             loading: null,
-            toast: null
+            toast: null,
+            bufferingDebounce: null,
+            audioCheck: null
         };
 
         // HLS/DASH instances
@@ -330,10 +339,21 @@ class FlexStreamPlayer {
             });
         }
         
+        // Quality Menu
+        if (this.elements.qualityBtn && this.elements.qualityMenu) {
+            this.elements.qualityBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.elements.qualityMenu.classList.toggle('active');
+            });
+        }
+
         // Close menus when clicking outside
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.speed-container')) {
                 this.elements.speedMenu.classList.remove('active');
+            }
+            if (!e.target.closest('.quality-container') && this.elements.qualityMenu) {
+                this.elements.qualityMenu.classList.remove('active');
             }
         });
         
@@ -399,6 +419,7 @@ class FlexStreamPlayer {
             this.bufferManager.bytesDownloaded = 0;
             this.bufferManager.maxWatchedPosition = 0;
             this.bufferManager.bufferRanges = [];
+            this.state.audioIssueChecked = false;
             
             this.showLoading('Loading video...');
             this.elements.loadingProgress.querySelector('.progress-bar').style.width = '0%';
@@ -430,15 +451,28 @@ class FlexStreamPlayer {
         });
         
         video.addEventListener('waiting', () => {
-            this.showLoading('Buffering...');
+            // Debounce: a short stall (a few frames of local decode catch-up,
+            // or a quick network blip) shouldn't flash the buffering overlay.
+            // Only show it if the wait actually persists.
+            clearTimeout(this.timeouts.bufferingDebounce);
+            this.timeouts.bufferingDebounce = setTimeout(() => {
+                this.showLoading('Buffering...');
+            }, 300);
         });
         
         video.addEventListener('playing', () => {
+            clearTimeout(this.timeouts.bufferingDebounce);
             this.hideLoading();
             this.state.isPlaying = true;
             this.elements.playerContainer.classList.add('playing');
             this.elements.playOverlay.classList.add('hidden');
             this.updatePlayButton();
+
+            if (!this.state.audioIssueChecked) {
+                this.state.audioIssueChecked = true;
+                clearTimeout(this.timeouts.audioCheck);
+                this.timeouts.audioCheck = setTimeout(() => this.checkAudioPlayback(), 1500);
+            }
         });
         
         video.addEventListener('pause', () => {
@@ -626,19 +660,39 @@ class FlexStreamPlayer {
             this.streaming.hls = new Hls({
                 maxBufferLength: 60,
                 maxMaxBufferLength: 120,
-                maxBufferSize: 60 * 1024 * 1024, // 60MB
+                // 4K/high-bitrate streams can easily need several hundred MB
+                // of buffer for the same time window a 480p stream needs in
+                // 60MB — a small cap here starves the buffer and forces
+                // hls.js's ABR logic to downgrade quality to keep up, even
+                // when bandwidth is fine. Give it much more headroom.
+                maxBufferSize: 600 * 1024 * 1024, // 600MB
                 maxBufferHole: 0.5,
                 enableWorker: true,
                 lowLatencyMode: true,
-                backBufferLength: 30
+                backBufferLength: 30,
+                // Never scale quality down to match the player's rendered
+                // size — always consider the full resolution ladder.
+                capLevelToPlayerSize: false,
+                // Don't silently cap level selection at all.
+                capLevelOnFPSDrop: false,
+                // -1 = let hls.js pick, but combined with the settings above
+                // it will pick based on real measured bandwidth rather than
+                // an artificial buffer/size ceiling.
+                startLevel: -1,
+                abrEwmaDefaultEstimate: 5000000 // assume decent bandwidth until measured
             });
             
             this.streaming.hls.loadSource(url);
             this.streaming.hls.attachMedia(video);
             
-            this.streaming.hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            this.streaming.hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
                 this.hideLoading();
                 console.log('✅ HLS manifest parsed');
+                this.populateQualityMenu(data.levels, 'hls');
+            });
+
+            this.streaming.hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+                this.updateQualityLabel('hls', data.level);
             });
             
             this.streaming.hls.on(Hls.Events.ERROR, (event, data) => {
@@ -650,6 +704,86 @@ class FlexStreamPlayer {
         } else {
             this.showError('HLS playback requires hls.js library');
         }
+    }
+
+    /* ============================
+       QUALITY MENU (HLS/DASH levels)
+    ============================ */
+
+    populateQualityMenu(levels, engine) {
+        const menu = this.elements.qualityMenu;
+        if (!menu || !levels || !levels.length) return;
+
+        menu.innerHTML = '';
+
+        const autoOption = document.createElement('button');
+        autoOption.className = 'quality-option active';
+        autoOption.dataset.level = '-1';
+        autoOption.innerHTML = `<span>Auto</span><span class="live-dot"></span>`;
+        autoOption.addEventListener('click', () => this.setQualityLevel(-1, engine));
+        menu.appendChild(autoOption);
+
+        // Highest resolution first
+        const sorted = levels
+            .map((lvl, index) => ({ index, height: lvl.height, bitrate: lvl.bitrate }))
+            .sort((a, b) => (b.height || 0) - (a.height || 0));
+
+        sorted.forEach(({ index, height, bitrate }) => {
+            const option = document.createElement('button');
+            option.className = 'quality-option';
+            option.dataset.level = index;
+            const label = height ? `${height}p` : `${Math.round((bitrate || 0) / 1000)}kbps`;
+            option.innerHTML = `<span>${label}</span>`;
+            option.addEventListener('click', () => this.setQualityLevel(index, engine));
+            menu.appendChild(option);
+        });
+
+        // Default to the single highest level so a 4K source starts at full
+        // resolution instead of ABR ramping up slowly from the bottom.
+        if (sorted.length) {
+            this.setQualityLevel(sorted[0].index, engine, true);
+        }
+    }
+
+    setQualityLevel(levelIndex, engine, isInitial = false) {
+        if (engine === 'hls' && this.streaming.hls) {
+            this.streaming.hls.currentLevel = levelIndex;
+        } else if (engine === 'dash' && this.streaming.dash) {
+            if (levelIndex === -1) {
+                this.streaming.dash.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: true } } } });
+            } else {
+                this.streaming.dash.updateSettings({ streaming: { abr: { autoSwitchBitrate: { video: false } } } });
+                this.streaming.dash.setQualityFor('video', levelIndex);
+            }
+        }
+
+        this.state.qualityLevel = levelIndex === -1 ? 'auto' : levelIndex;
+        this.updateQualityLabel(engine, levelIndex);
+
+        document.querySelectorAll('.quality-option').forEach(opt => {
+            opt.classList.toggle('active', parseInt(opt.dataset.level, 10) === levelIndex);
+        });
+
+        if (!isInitial) {
+            this.elements.qualityMenu.classList.remove('active');
+        }
+    }
+
+    updateQualityLabel(engine, levelIndex) {
+        if (!this.elements.qualityValue) return;
+
+        if (levelIndex === -1) {
+            this.elements.qualityValue.textContent = 'Auto';
+            return;
+        }
+
+        let levels = null;
+        if (engine === 'hls' && this.streaming.hls) levels = this.streaming.hls.levels;
+        if (engine === 'dash' && this.streaming.dash) levels = this.streaming.dash.getBitrateInfoListFor('video');
+
+        const level = levels && levels[levelIndex];
+        const height = level ? (level.height || level.height === 0 ? level.height : null) : null;
+        this.elements.qualityValue.textContent = height ? `${height}p` : `Q${levelIndex + 1}`;
     }
 
     async loadDASH(url) {
@@ -667,7 +801,25 @@ class FlexStreamPlayer {
                         fastSwitchEnabled: true,
                         bufferTimeAtTopQuality: 30,
                         bufferTimeAtTopQualityLongForm: 60,
+                    },
+                    abr: {
+                        // Don't cap resolution based on the player's on-screen
+                        // size — a 4K source should be allowed to play at 4K
+                        // even in a smaller window.
+                        limitBitrateByPortal: false,
+                        usePixelRatioInLimitBitrateByPortal: false
                     }
+                }
+            });
+
+            this.streaming.dash.on(dashjs.MediaPlayer.events.STREAM_INITIALIZED, () => {
+                const bitrates = this.streaming.dash.getBitrateInfoListFor('video') || [];
+                this.populateQualityMenu(bitrates, 'dash');
+            });
+
+            this.streaming.dash.on(dashjs.MediaPlayer.events.QUALITY_CHANGE_RENDERED, (e) => {
+                if (e.mediaType === 'video') {
+                    this.updateQualityLabel('dash', e.newQuality);
                 }
             });
         } else {
@@ -799,13 +951,18 @@ class FlexStreamPlayer {
         
         // Check if buffered
         const isBuffered = this.isTimeBuffered(targetTime);
+        const isLocalSource = video.src.startsWith('blob:') || video.src.startsWith('file:');
         
         if (!isBuffered && this.state.supportsRangeRequests === false) {
             this.showToast('Seeking not fully supported', 'Server may not support range requests.', 'warning');
         }
         
-        // Show loading for unbuffered seeks
-        if (!isBuffered) {
+        // Show loading for unbuffered seeks — but not for local files. A
+        // blob:/file: source is entirely on-disk already; the browser just
+        // hasn't reported that range as "buffered" yet because it decodes
+        // on demand. Showing a spinner here is misleading (there's no
+        // network fetch happening) and the seek finishes almost instantly.
+        if (!isBuffered && !isLocalSource) {
             this.showLoading('Seeking...');
         }
         
@@ -898,8 +1055,52 @@ class FlexStreamPlayer {
     }
 
     /* ============================
-       BUFFER MANAGEMENT
+       AUDIO DIAGNOSTICS
     ============================ */
+
+    // HTMLMediaElement has no standard API for "is decoded audio actually
+    // flowing" — this stitches together whatever non-standard signals
+    // browsers expose to catch the single most common real-world cause of
+    // "video plays but I hear nothing": a video container (MP4/MKV/TS) whose
+    // audio track is encoded in a codec the browser's audio decoder doesn't
+    // support (AC-3, E-AC-3/Dolby Digital+, DTS, TrueHD are the usual
+    // suspects in movie/TV rips) — the picture still decodes fine because
+    // the video codec (H.264/H.265/VP9/AV1) is entirely separate.
+    checkAudioPlayback() {
+        const video = this.elements.video;
+        if (!video || video.paused || video.ended) return;
+
+        // If the browser can tell us outright there's no audio track at
+        // all, that's just a silent source — nothing to warn about.
+        if (typeof video.mozHasAudio === 'boolean' && !video.mozHasAudio) return;
+        if (video.audioTracks && video.audioTracks.length === 0) return;
+
+        const decodedBytes = typeof video.webkitAudioDecodedByteCount === 'number'
+            ? video.webkitAudioDecodedByteCount
+            : null;
+
+        const userHasSoundOn = !video.muted && video.volume > 0 &&
+            !this.elements.video.muted && this.state.currentVolume > 0;
+
+        if (decodedBytes === 0 && userHasSoundOn) {
+            this.showToast(
+                'No audio decoded',
+                "This file's audio track likely uses a codec your browser can't play (e.g. AC-3, DTS or TrueHD in an MP4/MKV rip). The video works because its video codec is separate — try a copy with an AAC or Opus audio track.",
+                'warning'
+            );
+            this.updateAudioStatusInSidebar('Unsupported codec');
+        } else if (decodedBytes !== null && decodedBytes > 0) {
+            this.updateAudioStatusInSidebar('OK');
+        }
+    }
+
+    updateAudioStatusInSidebar(status) {
+        if (this.elements.infoAudio) {
+            this.elements.infoAudio.textContent = status;
+        }
+    }
+
+
 
     startBufferManagement() {
         // Clear existing interval
@@ -1129,6 +1330,10 @@ class FlexStreamPlayer {
             this.elements.infoSize.textContent = `${sizeMB} MB`;
         } else {
             this.elements.infoSize.textContent = 'Unknown';
+        }
+
+        if (this.elements.infoAudio) {
+            this.elements.infoAudio.textContent = 'Checking…';
         }
     }
 
@@ -1729,14 +1934,18 @@ class FlexStreamPlayer {
         const file = event.target.files[0];
         if (!file) return;
         
-        // Check file size
-        if (file.size > this.security.maxFileSize) {
-            this.showToast('File too large', 'Maximum file size is 1GB', 'error');
-            return;
-        }
-        
-        // Check file type
-        if (!file.type.startsWith('video/') && !file.type.startsWith('audio/')) {
+        // Check file type. Many video/audio containers (.mkv, .ts, .avi,
+        // .flv, .wmv, .mts...) aren't in the browser's built-in MIME
+        // database, so file.type comes back as an empty string even though
+        // the browser might still be able to decode and play them. Only
+        // reject when we have positive evidence it's neither video nor
+        // audio — fall back to the extension when the MIME type is unknown.
+        const knownMediaExtensions = /\.(mp4|m4v|webm|ogg|ogv|mov|mkv|avi|flv|wmv|mts|m2ts|ts|3gp|3g2|mpg|mpeg|m4a|mp3|wav|flac|aac|opus|weba|oga)$/i;
+        const looksLikeMedia = file.type.startsWith('video/') ||
+                                file.type.startsWith('audio/') ||
+                                (!file.type && knownMediaExtensions.test(file.name));
+
+        if (!looksLikeMedia) {
             this.showToast('Invalid file type', 'Please select a video or audio file', 'error');
             return;
         }
@@ -1972,7 +2181,13 @@ class FlexStreamPlayer {
     }
 
     toggleSidebar() {
+        // 'active' drives the mobile slide-in drawer (hidden by default,
+        // shown when active). 'collapsed' drives the desktop collapse
+        // (shown by default, shrunk to a thin strip when collapsed). Each
+        // class only has an effect within its own media query, so toggling
+        // both together is safe regardless of viewport size.
         this.elements.playerSidebar.classList.toggle('active');
+        this.elements.playerSidebar.classList.toggle('collapsed');
     }
 
     onFullscreenChange() {

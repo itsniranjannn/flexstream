@@ -298,7 +298,11 @@
                                     <button class="ctrl-btn quality-btn" id="qualityBtn" title="Quality">
                                         <i class="fas fa-hd"></i>
                                         <span id="qualityValue">Auto</span>
+                                        <i class="fas fa-chevron-down"></i>
                                     </button>
+                                    <div class="quality-menu" id="qualityMenu">
+                                        <!-- Populated dynamically from HLS/DASH levels -->
+                                    </div>
                                 </div>
 
                                 <!-- Subtitle Button -->
@@ -386,6 +390,10 @@
                                 <div class="info-item">
                                     <span class="info-label">Size:</span>
                                     <span class="info-value" id="infoSize">-</span>
+                                </div>
+                                <div class="info-item">
+                                    <span class="info-label">Audio:</span>
+                                    <span class="info-value" id="infoAudio">-</span>
                                 </div>
                             </div>
                         </div>

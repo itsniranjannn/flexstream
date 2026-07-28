@@ -1087,8 +1087,15 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
   inset: 0;
   width: 0%;
   background: linear-gradient(90deg, var(--beam), var(--beam-soft));
+  background-size: 200% 100%;
   border-radius: var(--radius-full);
   box-shadow: 0 0 12px var(--beam-glow);
+  animation: progressShimmer 3s linear infinite;
+}
+
+@keyframes progressShimmer {
+  0% { background-position: 0% 0; }
+  100% { background-position: -200% 0; }
 }
 
 .progress-thumb {
@@ -1103,6 +1110,12 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
   transform: translate(-50%, -50%) scale(0);
   transition: transform 0.15s var(--ease-snap);
   box-shadow: 0 0 0 3px var(--beam-glow);
+  animation: thumbPulse 2s ease-in-out infinite;
+}
+
+@keyframes thumbPulse {
+  0%, 100% { box-shadow: 0 0 0 3px var(--beam-glow); }
+  50% { box-shadow: 0 0 0 6px transparent; }
 }
 
 .progress-container:hover .progress-thumb { transform: translate(-50%, -50%) scale(1); }
@@ -1339,6 +1352,69 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
   font-weight: 600;
 }
 
+.quality-btn {
+  width: auto;
+  padding: 0 var(--space-3);
+  gap: var(--space-1);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.quality-menu {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  right: 0;
+  z-index: var(--z-modal);
+  width: 160px;
+  padding: var(--space-2);
+  background: var(--surface-raised);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-md);
+  box-shadow: 0 16px 40px -12px rgba(0,0,0,0.6);
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+  pointer-events: none;
+  transition: all 0.18s var(--ease);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quality-menu.active {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+.quality-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-dim);
+  transition: all 0.15s var(--ease);
+}
+
+.quality-option:hover { background: var(--surface-hover); color: var(--ink); }
+.quality-option.active { background: var(--beam); color: var(--void); font-weight: 700; }
+
+.quality-option .live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.8;
+  animation: liveDotPulse 1.6s ease-in-out infinite;
+}
+
+@keyframes liveDotPulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+
 .quality-btn { width: auto; padding: 0 var(--space-3); gap: 6px; font-size: 12px; }
 
 .controls-bottom {
@@ -1498,6 +1574,10 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
     opacity: 1;
     pointer-events: auto;
   }
+}
+
+.sidebar-content {
+  transition: opacity 0.2s var(--ease);
 }
 
 .sidebar-content > div + div {
@@ -1666,6 +1746,79 @@ body.theme-light .theme-toggle .fa-sun { display: block; }
 .back-btn:hover i { transform: translateX(-3px); }
 
 .player-section.active { display: flex; flex-direction: column; align-items: center; }
+
+/* On wide viewports, lay the player + sidebar out as real side-by-side
+   columns instead of stacking the sidebar underneath the video. */
+@media (min-width: 1100px) {
+  .player-section.active {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-rows: auto auto;
+    align-items: start;
+    gap: var(--space-5);
+    max-width: 1500px;
+    width: 100%;
+    margin: 0 auto;
+  }
+
+  .player-section > .back-btn {
+    grid-column: 1 / -1;
+  }
+
+  .player-container {
+    grid-column: 1;
+  }
+
+  .player-sidebar {
+    grid-column: 2;
+    grid-row: 2;
+    width: 100%;
+    align-self: start;
+    position: sticky;
+    top: var(--space-5);
+    transition: width 0.3s var(--ease), padding 0.3s var(--ease);
+  }
+
+  /* Collapse to a slim strip, leaving just the toggle visible */
+  .player-sidebar.collapsed {
+    width: 52px;
+    padding: var(--space-3) var(--space-2);
+    overflow: hidden;
+  }
+
+  .player-sidebar.collapsed .sidebar-content {
+    opacity: 0;
+    pointer-events: none;
+  }
+
+  .player-section.active:has(.player-sidebar.collapsed) {
+    grid-template-columns: minmax(0, 1fr) 52px;
+  }
+
+  /* A real, always-visible collapse toggle for the desktop layout */
+  .sidebar-toggle {
+    display: grid;
+    place-items: center;
+    position: relative;
+    width: 28px;
+    height: 28px;
+    margin-bottom: var(--space-3);
+    background: var(--surface-raised);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    color: var(--ink-dim);
+    transition: all 0.2s var(--ease);
+  }
+
+  .sidebar-toggle:hover { color: var(--beam); border-color: var(--beam-dim); transform: translateY(-1px); }
+
+  .sidebar-toggle i {
+    display: inline-block;
+    transition: transform 0.3s var(--ease);
+  }
+
+  .player-sidebar.collapsed .sidebar-toggle i { transform: rotate(180deg); }
+}
 
 .player-section > .back-btn {
   align-self: center;

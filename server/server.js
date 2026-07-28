@@ -24,6 +24,12 @@ const MAX_REDIRECTS = 5;
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || crypto.randomBytes(24).toString('hex');
 const ADMIN_TOKEN_WAS_GENERATED = !process.env.ADMIN_TOKEN;
 
+// Only trust the X-Forwarded-For header when the server is known to be
+// behind a trusted reverse proxy (e.g. nginx, a load balancer). Without
+// this, any client can set X-Forwarded-For itself and get its own fresh
+// rate-limit bucket, defeating rate limiting entirely.
+const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
+
 // Ensure cache directory exists
 if (!fs.existsSync(CACHE_DIR)) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -388,7 +394,9 @@ function getRandomUserAgent() {
 
 // Create server
 const server = http.createServer(async (req, res) => {
-    const clientIp = req.headers['x-forwarded-for'] || req.socket.remoteAddress;
+    const clientIp = (TRUST_PROXY && req.headers['x-forwarded-for'])
+        ? req.headers['x-forwarded-for'].split(',')[0].trim()
+        : req.socket.remoteAddress;
     const parsedUrl = url.parse(req.url, true);
     const pathname = parsedUrl.pathname;
     
@@ -545,6 +553,18 @@ async function proxyVideo(videoUrl, clientReq, clientRes, clientIp, redirectCoun
 
     const parsedUrl = url.parse(videoUrl);
 
+    // Only http/https targets are ever allowed. Without this, url.parse
+    // happily accepts schemes like file:, ftp:, or gopher:, and the
+    // `parsedUrl.protocol === 'https:' ? https : http` check below would
+    // silently fall back to treating anything non-https as a plain http
+    // request — including garbage or internal-only schemes.
+    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        throw new Error(`Unsupported protocol: ${parsedUrl.protocol}`);
+    }
+    if (!parsedUrl.hostname) {
+        throw new Error('Invalid URL: missing hostname');
+    }
+
     // Security check — resolves the hostname and blocks internal/loopback
     // targets. Re-run on every redirect hop by the caller below, so a
     // redirect can't smuggle the proxy into an internal address after the
@@ -605,12 +625,14 @@ async function proxyVideo(videoUrl, clientReq, clientRes, clientIp, redirectCoun
                 return;
             }
             
-            // Check content length
+            // Note: we intentionally do NOT reject based on Content-Length
+            // here. This is a streaming proxy, not a storage service — a
+            // full-length 4K video can easily be several GB, and refusing
+            // to even start the stream because of that would break
+            // legitimate playback. SECURITY.maxContentSize is only used
+            // below to decide whether a response is small enough to be
+            // worth caching in memory, not whether it's allowed to stream.
             const contentLength = proxyRes.headers['content-length'];
-            if (contentLength && parseInt(contentLength) > SECURITY.maxContentSize) {
-                reject(new Error(`Content too large: ${contentLength} bytes`));
-                return;
-            }
             
             // Collect data for caching
             let responseData = Buffer.alloc(0);
