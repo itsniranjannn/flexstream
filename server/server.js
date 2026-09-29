@@ -13,7 +13,9 @@ const crypto = require('crypto');
 const dns = require('dns').promises;
 
 const PORT = parseInt(process.env.PORT, 10) || 4000;
-const CACHE_DIR = path.join(__dirname, '.cache');
+const CACHE_DIR = process.env.VERCEL
+    ? path.join('/tmp', 'flexstream-cache')
+    : path.join(__dirname, '.cache');
 const MAX_CACHE_SIZE = parseInt(process.env.MAX_CACHE_SIZE, 10) || 100 * 1024 * 1024; // 100MB
 const REQUEST_TIMEOUT = 30000; // 30 seconds
 const MAX_REDIRECTS = 5;
@@ -392,8 +394,8 @@ function getRandomUserAgent() {
     return SECURITY.userAgents[Math.floor(Math.random() * SECURITY.userAgents.length)];
 }
 
-// Create server
-const server = http.createServer(async (req, res) => {
+// Request handler shared by local HTTP and Vercel runtimes.
+async function handler(req, res) {
     const clientIp = (TRUST_PROXY && req.headers['x-forwarded-for'])
         ? req.headers['x-forwarded-for'].split(',')[0].trim()
         : req.socket.remoteAddress;
@@ -510,12 +512,13 @@ const server = http.createServer(async (req, res) => {
     
     // Serve static files
     let filePath = pathname === '/' ? '/index.html' : pathname;
-    filePath = path.join(__dirname, 'public', filePath);
+    const publicDirectory = path.resolve(__dirname, '..', 'public');
+    filePath = path.join(publicDirectory, filePath);
 
     // Security: prevent directory traversal. Resolve fully and require the
     // result to sit *inside* the public root — comparing with a trailing
     // separator so "public-evil" can't pass a bare startsWith check.
-    const publicRoot = path.resolve(__dirname, 'public') + path.sep;
+    const publicRoot = publicDirectory + path.sep;
     const normalizedPath = path.resolve(filePath);
     if (!(normalizedPath + path.sep).startsWith(publicRoot) && normalizedPath !== publicRoot.slice(0, -1)) {
         res.writeHead(403);
@@ -544,7 +547,9 @@ const server = http.createServer(async (req, res) => {
         });
         res.end(data);
     });
-});
+}
+
+const server = http.createServer(handler);
 
 async function proxyVideo(videoUrl, clientReq, clientRes, clientIp, redirectCount = 0) {
     if (redirectCount > MAX_REDIRECTS) {
@@ -729,8 +734,8 @@ async function proxyVideo(videoUrl, clientReq, clientRes, clientIp, redirectCoun
     });
 }
 
-// Start server
-server.listen(PORT, () => {
+function startServer() {
+    server.listen(PORT, () => {
     console.log(`
 ╔════════════════════════════════════════════════════════════════╗
 ║                                                                ║
@@ -760,7 +765,8 @@ server.listen(PORT, () => {
     // Log cache stats
     const stats = cacheManager.getStats();
     console.log(`📦 Cache: ${stats.count} files, ${stats.totalSize}`);
-});
+    });
+}
 
 // Graceful shutdown
 process.on('SIGINT', () => {
@@ -782,3 +788,9 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled rejection at:', promise, 'reason:', reason);
 });
+
+if (require.main === module && !process.env.VERCEL) {
+    startServer();
+}
+
+module.exports = handler;

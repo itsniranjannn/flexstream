@@ -579,7 +579,7 @@ class FlexStreamPlayer {
         // Check if proxy should be used
         const useProxy = this.elements.useProxyCheckbox && this.elements.useProxyCheckbox.checked;
         if (useProxy) {
-            url = `http://localhost:4000/proxy?url=${encodeURIComponent(url)}`;
+            url = `/proxy?url=${encodeURIComponent(url)}`;
             console.log('🔄 Using proxy server');
         }
         

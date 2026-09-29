@@ -123,6 +123,14 @@ Then open **`http://localhost:4000`** — that's it.
 
 > **Tip:** `npm run dev` hot-reloads the server with `nodemon` if it's installed as a devDependency.
 
+### Deploy to Vercel
+
+The repository includes a `vercel.json` configuration that deploys the Node.js
+server as a Vercel Function and serves the web UI from the same function.
+Import the repository in Vercel with the project root set to the repository
+root, then deploy with the default build settings. The proxy toggle uses the
+current deployment URL, so it works outside local development as well.
+
 <br>
 
 ## 🧭 How It Works
